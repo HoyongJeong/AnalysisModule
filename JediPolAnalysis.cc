@@ -289,11 +289,11 @@ void JediPolAnalysis::ProcessEvent()
 	while ( WHitScint* hit = static_cast<WHitScint*> (it.Next()) )
 	{
 		TrackReco(hit, m_FWCHitBank, m_FRHHitBank, m_FPCTrackBank, m_NTracks, goodTrack);
-//		if ( goodTrack ) fNTTracks++;
+		if ( goodTrack ) m_NTracks++;
 	}
-//	hTracksN -> Fill(fNTTracks); 
+	m_HNTracks -> Fill(m_NTracks); 
 
-//	if ( fTree && fNTTracks > 0 ) fTree -> Fill();
+	if ( m_Tree && m_NTracks > 0 ) m_Tree -> Fill();
 
 	// Raw Info
 	TrackRaw(m_FWCHitBank, 1, 1);

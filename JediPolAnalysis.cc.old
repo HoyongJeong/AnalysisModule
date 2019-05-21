@@ -1,0 +1,1211 @@
+/*
+ * $Id: alpha.cc 1621 2006-07-19 14:17:23Z hejny $
+ *
+ * Software developement for WASA-at-COSY
+ * (c) 2005 The WASA-at-COSY Collaboration
+ * List of authors:
+ *    Izabela Ciepal             IFJ PAN
+ *    Maria Zurek                FZ Juelich
+ *    Ola Wronska                JU Krakow
+ */
+
+#include <iostream>
+#include <fstream>
+#include "Wasa.hh"
+#include "CConst.hh"
+#include "TRandom.h"
+#include "CDataManager.hh"
+#include "CHistoManager.hh"
+#include "CParameterManager.hh"
+#include "CLog.hh"
+#include "WCluster.hh"
+#include "FPCTracksVH.hh"
+#include "WTrack.hh"
+#include "WVertex.hh"
+#include "WHitScint.hh"
+#include <TString.h>
+#include "WTrackFinder.hh"
+#include "TStyle.h"
+#include "TBits.h"
+#include "EmsEvent.hh"
+#include "TMinuit.h"
+#include "LVDSSetup.hh"
+#include "TRandom.h"
+
+#include "TFile.h"
+#include "TTree.h"
+#include "TGraphErrors.h"
+#include "JediPolAnalysis.hh"
+#include "TreeTrack.hh"
+
+using namespace std;
+
+TString sMCGraphsFileName   = "mc_graphs/mc_graphs_pC_elastic_380MeV.root";
+TString sDataGraphsFileName = "data_graphs/data_graphs_pC_380MeV.root";
+TString sRunDepPath         = "rundep";
+TString sLinFuncFileName    = "linearity/linearity_correction.root";
+
+const char *cLayerNames[8] = {"FWC1", "FWC2", "FTH", "FRH1", "FRH2", "FRH3", "FRH4", "FRH5"};
+const int iLayerElements[8] = {24, 24, 48, 24, 24, 24, 24, 24};
+Int_t nLayers;
+Int_t *iSelectedLayers; // array to store numbers for selected layers
+
+TF1 *fLinearityCorrection[8];  // linear correction function for every layer
+TF1 *fLinearityCorrectionEl22; // linear correction function for el 22 for FRH2
+TGraphErrors *geMCGraphs[8]; // d elastic peak vs theta for every layer - MC
+TGraphErrors **geDataGraphs[8]; // d elastic peak vs theta for every layer and element - Data  
+TGraphErrors **geRunDependenceGraphs[8]; // run correction graphs for every layer and element
+Double_t dRunCorrMC[8]; // array to store run-dependent corrections
+
+Bool_t fEl22Corr = kFALSE;
+
+ClassImp(JediPolAnalysis);
+
+//#####################################################################
+JediPolAnalysis::JediPolAnalysis()
+{
+}
+
+//#####################################################################
+JediPolAnalysis::JediPolAnalysis(const char *name) : CAnalysisModule(name)
+{
+	TString option = GetName();
+
+	// Track finder 
+	if ( gWasa -> IsAnalysisMode(Wasa::kMC) )
+	{
+		fMCTrackFinder = dynamic_cast<MCTrackFinder *>
+			(gDataManager -> GetAnalysisModule("MCTrackFinder", "default"));
+    
+		fMCTrackBank  = fMCTrackFinder -> GetTrackBank();
+		fMCVertexBank = fMCTrackFinder -> GetVertexBank();
+    
+		if ( fMCTrackFinder == 0 )
+		{
+			gLog(CException::kNullPointer) << "No MCTrackFinder" << CLog::endl;
+			return;
+		}
+		fIsMC = kTRUE;
+	}
+	else
+	{
+		fIsMC = kFALSE;
+	}
+
+	TString nameFWC = "FWCHitBankRaw";
+	TString nameFTH = "FTHHitBankRaw";
+	TString nameFRH = "FRHHitBankRaw";
+
+	if ( fIsMC )
+	{
+		nameFWC = "FWCHitBank";
+		nameFTH = "FTHHitBank";
+		nameFRH = "FRHHitBank";
+	}
+
+	fFWCHitBank = dynamic_cast<WHitBank *>
+		(gDataManager -> GetDataObject("WHitBank", nameFWC));
+
+	if ( fFWCHitBank == 0 )
+	{
+		gLog(CException::kNullPointer) << "No FWCHitBank" << CLog::endl;
+		return;
+	}
+
+	// FTH hits bank
+	fFTHHitBank = dynamic_cast<WHitBank *>
+		(gDataManager -> GetDataObject("WHitBank", nameFTH));
+
+	if ( fFTHHitBank == 0 )
+	{
+		gLog(CException::kNullPointer) << "No FTHHitBank" << CLog::endl;
+		return;
+	}
+
+	// FRH hits bank
+	fFRHHitBank = dynamic_cast<WHitBank *>
+		(gDataManager -> GetDataObject("WHitBank", nameFRH));
+
+	if ( fFRHHitBank == 0 )
+	{
+		gLog(CException::kNullPointer) << "No FRHHitBank" << CLog::endl;
+		return;
+	}
+
+	// FPC hits Bank
+	fFPCTrackBank = 0;
+	fFPCTrackFinder = dynamic_cast<FPCTracksVH *>
+		(gDataManager -> GetAnalysisModule("FPCTracksVH", "Default"));
+	if ( fFPCTrackFinder == 0 )
+	{
+		gLog(CException::kNullPointer) << "No FPCTrackFinder" << CLog::endl;
+		return;
+	}
+	fFPCTrackBank = fFPCTrackFinder -> GetTrackBank();
+  
+	// Header       
+	fHeader = dynamic_cast<REventHeader *>
+		(gDataManager -> GetDataObject("REventHeader", "Header"));
+	if ( fHeader == 0 )
+	{
+		gLog(CException::kNullPointer) << "No Header" << CLog::endl;
+		return;
+	}
+
+	// LVDSSetup
+	fsetup = dynamic_cast<LVDSSetup *>
+		(gParameterManager -> GetParameterObject("LVDSSetup", "default"));
+
+	if ( fsetup == 0 )
+	{
+		gLog(CException::kNotSupported) << "EmsFilterLVDS: no LVDSSetup object returned." << CLog::endl;
+	}
+
+	fOffsetTQDC = 0;
+	fOffsetTGPX = 0;
+	fOffsetTF1  = 0;
+	const Double_t *delays = fsetup -> GetDelayTable();
+	if ( delays )
+	{
+		fOffsetTQDC = delays[0];
+		fOffsetTGPX = delays[1];
+		fOffsetTF1  = delays[2];
+	}
+
+//	gloheader = 0; gloheader_tmp = 0;
+    
+	fTrackArray = new TClonesArray("TreeTrack", 100);
+
+	TString tname = SorterOption::GetStringValue("Name");
+	tname += "_tree.root";
+
+	fFile = new TFile(tname, "RECREATE");
+	fTree = new TTree("data", "data");
+  
+	fTree -> Branch("beame"     , &beame);
+	fTree -> Branch("target"    , &target);
+	fTree -> Branch("polar"     , &polar);
+	fTree -> Branch("runnb"     , &runnb);
+	fTree -> Branch("time_h"    , &time_h);
+	fTree -> Branch("time_cycle", &time_cycle);
+	fTree -> Branch("trigger"   , &trigger);
+	fTree -> Branch("Tracks"    , &fTrackArray);
+	fTree -> Branch("N"         , &fNTTracks, "N/I");
+
+	SetupSpectra(option);
+	Clear();
+
+	NotifyEndOfRun;
+	NotifyBeginOfRun;
+
+	// FTH Geometry 
+	FTHGeometry.ReadParameter("FTHGeo_default");
+	FTHGeometry.InitializeParameter();
+}
+
+
+Int_t JediPolAnalysis::setEkinReal(Int_t ekin)
+{
+	Int_t EkinReal;
+
+	if ( ekin == 270 )
+	{
+		EkinReal = 274;
+	}
+	else if ( ekin == 170 )
+	{
+		EkinReal = 172;
+	}
+	else if ( ekin == 200)
+	{
+		EkinReal = 202;
+	}
+	else if ( ekin == 300 )
+	{
+		EkinReal = 304;
+	}
+	else if ( ekin == 340 )
+	{
+		EkinReal = 343;
+	}
+	else
+	{
+		EkinReal = ekin;
+	}
+
+	return EkinReal;
+}
+
+
+// Set the layers which should be taken into consideration
+void JediPolAnalysis::setLayers(Int_t ekin)
+{
+	if ( ekin == 380 || ekin == 340 )
+	{
+		nLayers = 5;
+	}
+	else if ( ekin == 300 || ekin == 270 )
+	{
+		nLayers = 4;
+	}
+	else if ( ekin == 235 || ekin == 200 )
+	{
+		nLayers = 3;
+	}
+	else if ( ekin == 170 )
+	{
+		nLayers = 2;
+	}
+	else
+	{
+		std::cout << "setLayers: Wrong Ekin" << std::endl;
+		return;
+	}
+
+	iSelectedLayers = new Int_t[nLayers];
+	for ( Int_t l = 0; l < nLayers; l++ )
+	{
+		iSelectedLayers[l] = l + 2;
+	}
+
+	return;
+}
+
+
+//#####################################################################
+void JediPolAnalysis::BeginOfRun(Int_t run)
+{
+	if ( CheckRun(run) )
+	{
+		fGoodRun = kTRUE;
+		if ( target == 0 ) fTarget = "C";
+		else fTarget = "CH2";
+		cout << "Target: " << fTarget << " Ekin of beam: " << beame << endl;
+   
+		fEl22Corr = CheckRunCorrEl22(run); // check if correction for el 22 is needed
+
+		if ( !fIsMC )
+		{
+			loadCalibration(beame); // Load Calibration parameters
+		}
+	}
+	else
+	{
+		fGoodRun = kFALSE;
+	}
+}
+
+void JediPolAnalysis::EndOfRun(Int_t run)
+{
+	beame   = -1;
+	target  = -1;
+	runnb   = -1;
+	fTarget = "";
+}
+
+
+//####################################TDC and QDC time peaks############################################
+const Double_t JediPolAnalysis::TimeQdcPeak[8]
+	= {347.871 , 347.449 , 331.348, 314.259 , 313.63  , 313.51  , 309.3   , 304.784 };
+const Double_t JediPolAnalysis::DeltaTimePeak[8]
+	= { 49.3726,  48.6801,  39.54 ,  23.4205,  24.3212,  27.3469,  27.9761,  36.4743};
+
+
+//######################################################################################################
+Bool_t JediPolAnalysis::CheckRun(Int_t r)
+{
+	Bool_t Good = kFALSE;
+	Int_t tg = -1;
+	Int_t bm = -1.;
+
+	if ( fIsMC )
+	{
+		Good = kTRUE;
+	}
+	else
+	{
+		if      ( (r >= 47068 && r <= 47074) || (r >= 47078 && r <= 47103) )
+		{
+			Good = kTRUE;  
+			bm = 270;
+			tg = 0; // Carbon
+		}
+		else if ( (r >= 47107 && r <= 47142) || (r >= 47147 && r <= 47195) )
+		{
+			Good = kTRUE;
+			bm = 270;
+			tg = 1; // CH2
+		}
+		else if ( (r >= 47202 && r <= 47261) || (r >= 47263 && r <= 47270) || (r >= 47272 && r <= 47275) )
+		{
+			Good = kTRUE;
+			bm = 200;
+			tg = 1; // CH2
+		}
+		else if ( r >= 47276 && r <= 47359 )
+		{
+			Good = kTRUE;
+			bm = 200;
+			tg = 0; // Carbon
+		}
+		else if ( r >= 47364 && r <= 47412 )
+		{
+			Good = kTRUE;
+			bm = 170;
+			tg = 0; // Carbon
+		}
+		else if ( r >= 47414 && r <= 47476 )
+		{
+			Good = kTRUE;
+			bm = 170;
+			tg = 1; // CH2
+		}
+		else if ( (r >= 47479 && r <= 47494) || (r >= 47496 && r <= 47537) )
+		{
+			Good = kTRUE;
+			bm = 235;
+			tg = 1; // CH2
+		}
+		else if ( r >= 47538 && r <= 47607 )
+		{
+			Good = kTRUE;
+			bm = 235;
+			tg = 0; // Carbon
+		}
+		else if ( r >= 47613 && r <= 47701 )
+		{
+			Good = kTRUE;
+			bm = 300;
+			tg = 1; // CH2
+		}
+		else if ( (r >= 47706 && r <= 47786) || (r >= 47788 && r <= 47794) )
+		{
+			Good = kTRUE;
+			bm = 300;
+			tg = 0; // Carbon
+		}
+		else if ( r >= 47802 && r <= 47846 )
+		{
+			Good = kTRUE;
+			bm = 270;
+			tg = 0; // Carbon
+		}
+		else if ( (r >= 47847 && r <= 47893) || (r >= 47895 && r <= 47947) )
+		{
+			Good = kTRUE;
+			bm = 340;
+			tg = 0; // Carbon
+		} 
+		else if ( (r >= 47948 && r <= 47949) || (r >= 47951 && r <= 47982) || (r >= 47984 && r <= 48042) )
+		{
+			Good = kTRUE;
+			bm = 340;
+			tg = 1; // CH2
+		}
+		else if ( r >= 48043 && r <= 48124 )
+		{
+			Good = kTRUE;
+			bm = 380;
+			tg = 0; // Carbon
+		}
+		else if ( r >= 48125 )
+		{
+			Good = kTRUE;
+			bm = 380;
+			tg = 1; // CH2
+		}
+		else
+		{
+			Good = kFALSE;
+		}
+	}
+
+	if ( Good )
+	{
+		target = tg;
+		beame = bm;
+		runnb = r;
+	}
+
+	return Good;
+}
+
+
+Bool_t JediPolAnalysis::CheckRunCorrEl22(Int_t r)
+{
+	Bool_t CorrEl22 = kFALSE;
+
+	if ( fIsMC )
+	{
+		return kFALSE;
+	}
+	else
+	{
+		if ( r>=47107 && r<=47142)
+		{
+			CorrEl22=kTRUE;
+		}
+		else if ( r>=47479 && r<=47494 )
+		{
+			CorrEl22=kTRUE;
+		}
+		else if ( r>=47847 && r<=47893 )
+		{
+			CorrEl22=kTRUE;
+		} 
+		else
+		{
+			CorrEl22=kFALSE;
+		}
+	}
+
+	return CorrEl22;
+}
+
+
+//#####################################################################
+JediPolAnalysis::~JediPolAnalysis()
+{
+	if ( fFile )
+	{
+		fFile -> Write();
+		fFile -> Close();
+	}
+}
+
+
+Double_t JediPolAnalysis::Smooth()
+{
+	Double_t Smooth = Rand.Rndm() - 0.5;
+	return Smooth;
+}
+
+
+void JediPolAnalysis::TrackRaw(WHitBank *HitBank, Int_t plane_global, Int_t plane)
+{
+	Float_t el = 0.;
+	Float_t pl = 0.;                                     
+	WHitIter it(HitBank);
+	while ( WHitScint *hit = static_cast<WHitScint *> (it.Next()) )
+	{
+		el = hit -> ID().GetEl();
+		pl = hit -> ID().GetPlane();
+		if ( pl == plane )
+		{
+			WHitScintRaw *rawhit = static_cast<WHitScintRaw *> (hit);
+			QDCRawInfo *rawInfo = dynamic_cast<QDCRawInfo *> (rawhit -> GetQDCRawInfo());
+			// QDC time 
+			Int_t NrADCPulses = rawInfo -> GetNumOfPulses();
+			for ( Int_t iADChit = 0; iADChit < NrADCPulses; iADChit++ )
+			{
+				Float_t adcTtemp = rawInfo -> GetZCTime(iADChit);
+				hADCt[plane_global - 1]     -> Fill(adcTtemp);
+				hADCtvsEl[plane_global - 1] -> Fill(el, adcTtemp);
+				// TDC time
+				Int_t NrTDChitsLR = hit -> GetNTimes();
+				Double_t tdcTtemp = - 10000;
+				for ( Int_t iTDChit = 0; iTDChit < NrTDChitsLR; iTDChit++ )
+				{
+					tdcTtemp = hit -> GetT(iTDChit);
+					Double_t Delta = (adcTtemp+fOffsetTQDC+Smooth())*scale_tqdc - (tdcTtemp+fOffsetTGPX+Smooth())*scale_tdc;
+					hDeltaTime[plane_global - 1]     -> Fill(Delta);
+					hDeltaTimevsEl[plane_global - 1] -> Fill(el, Delta);
+				}
+			} // Loop over ADCPulses
+		} // pl == plane
+	} // loop over hits
+
+	return;
+}
+
+
+Bool_t JediPolAnalysis::HitInfo(WHitScint *hit, Int_t plane_global, Double_t &tdc, Double_t &qdc, Bool_t IsVerbose)
+{
+	qdc = -1.;
+	tdc = -1.;
+	Int_t tqdc = -1;
+	Bool_t IsGoodTrack = kTRUE;
+	Float_t el = 0.;
+	el = hit -> ID().GetEl();
+
+
+	Int_t accepted = - 1;
+	Double_t closest = 10000.;
+	Float_t adcTtemp = - 1;  
+  
+	if ( fIsMC )
+	{
+		qdc = hit -> GetE();
+		if ( !WHit::IsSetQ(qdc) )
+		{
+			if ( IsVerbose ) std::cout << "HitInfo: No Q" << std::endl;
+			return IsGoodTrack = kFALSE;
+		}
+	}
+	else
+	{
+		WHitScintRaw *raw = static_cast<WHitScintRaw *> (hit);
+		QDCRawInfo *rawInfo = dynamic_cast<QDCRawInfo *> (raw -> GetQDCRawInfo());
+		// QDC time 
+		Int_t NrADCPulses = rawInfo -> GetNumOfPulses();
+		// If no Q
+		if ( NrADCPulses == 0 )
+		{
+			if ( IsVerbose ) std::cout << "HitInfo: No Q, ADC pulses = 0" << std::endl;
+			return IsGoodTrack = kFALSE;
+		}
+		for ( Int_t iADChit = 0; iADChit < NrADCPulses; iADChit++ )
+		{
+			adcTtemp = rawInfo -> GetZCTime(iADChit);
+			hADCt[plane_global - 1]     -> Fill(adcTtemp);
+			hADCtvsEl[plane_global - 1] -> Fill(el, adcTtemp);
+			if ( adcTtemp > 0 && adcTtemp < 600 )
+			{
+				if ( fabs(adcTtemp - TimeQdcPeak[plane_global - 1]) < closest )
+				{
+					closest = fabs(adcTtemp - TimeQdcPeak[plane_global - 1]);
+					accepted = iADChit;
+				}
+			}
+		}
+		if ( accepted < 0 )
+		{ 
+			if ( IsVerbose ) std::cout << "HitInfo: No T_QDC in the window" << std::endl;
+/*			for ( Int_t iADChit = 0; iADChit < NrADCPulses; iADChit++ )
+			{
+				adcTtemp = rawInfo -> GetZCTime(iADChit);
+				cout << "Time QDC" << adcTtemp << endl;
+			}
+*/
+			return IsGoodTrack = kFALSE;
+		}
+		qdc  = rawInfo -> GetQ(accepted);
+		tqdc = rawInfo -> GetZCTime(accepted);
+	}
+          
+	// If no T
+	Int_t NrTDChits = hit -> GetNTimes();
+	if ( NrTDChits == 0 )
+	{
+		if ( IsVerbose ) std::cout << "HitInfo: No T" << std::endl;
+		return IsGoodTrack = kFALSE;
+	}
+
+	accepted = - 1;
+	closest = 10000.;
+  
+	Double_t tdcTtemp = - 10000;
+	for ( Int_t iTDChit = 0; iTDChit < NrTDChits; iTDChit++ )
+	{
+		if ( fIsMC )
+		{
+			tdc = hit -> GetT(iTDChit);                
+			if ( tdc > 1500 && tdc < 2500 )
+			{
+				if ( fabs(tdc - 2000.) < closest )
+				{
+					closest = fabs(tdc - 2000.);
+					accepted = iTDChit;
+				}
+			}
+		}
+		else
+		{
+			WHitScintRaw *raw = static_cast<WHitScintRaw *> (hit);
+			tdcTtemp = raw -> GetAllTimes()[iTDChit];
+			Double_t Delta = (tqdc+fOffsetTQDC+Smooth())*scale_tqdc - (tdcTtemp+fOffsetTGPX+Smooth())*scale_tdc;
+			hDeltaTime[plane_global - 1]     -> Fill(Delta);
+			hDeltaTimevsEl[plane_global - 1] -> Fill(el, Delta);
+			if ( Delta > 0 && Delta < 80 )
+			{
+				if ( fabs(Delta - DeltaTimePeak[plane_global-1]) < closest )
+				{
+					closest = fabs(Delta - DeltaTimePeak[plane_global - 1]);
+					accepted = iTDChit;
+				}
+			}
+		}
+	}
+
+	if ( accepted < 0 )
+	{
+/*		for ( Int_t iTDChit = 0; iTDChit < NrTDChits; iTDChit++ )
+		{
+			tdcTtemp = raw -> GetAllTimes()[iTDChit];
+			Double_t Delta = (tqdc+fOffsetTQDC+Smooth())*scale_tqdc - (tdcTtemp+fOffsetTGPX+Smooth())*scale_tdc;
+			cout << "TDC channels:" << tdcTtemp
+				 << " TDC: "        << (tdcTtemp+fOffsetTGPX+Smooth())*scale_tdc
+				 << " Time QDC: "   << (tqdc+fOffsetTQDC+Smooth())*scale_tqdc
+				 << " Delta: "      << Delta << endl;
+		}
+*/
+		if ( IsVerbose ) std::cout << "HitInfo: No T in window" << endl;
+		return IsGoodTrack = kFALSE;
+	}
+
+
+	tdc = hit -> GetT(accepted);
+
+
+	return IsGoodTrack;
+}
+
+
+void JediPolAnalysis::TrackReco(WHitScint *FTHhit, WHitBank *FWCHitBank, WHitBank *FRHHitBank, WTrackBank *FPCTrackBank, Int_t NTTracks, Bool_t &IsGoodTrack, Bool_t IsVerbose)
+{
+	IsGoodTrack = kTRUE;
+
+	Int_t el = 0;
+	Double_t tdc = - 1;
+	Double_t adc = - 1;
+
+	for ( int i = 0; i < 8; i++ ) ftdc[i] = -1;
+	for ( int i = 0; i < 8; i++ ) fadc[i] = -1;
+	for ( int i = 0; i < 8; i++ ) fel[i]  = -1;
+
+	el = FTHhit -> ID().GetEl();
+	fel[2] = el;
+
+	if ( HitInfo(FTHhit, 3, tdc, adc, IsVerbose) )
+	{
+		ftdc[2] = tdc;
+		fadc[2] = adc;
+	}
+	else
+	{
+		if ( IsVerbose ) std::cout << "TrackReco: No valid FTH hit" << std::endl;
+		IsGoodTrack = kFALSE;
+		hFailReas -> Fill(0);
+		return;
+	}
+
+	WHitScint *hit1;
+	WHitScint *hit2;
+	WHitScint *hit;
+
+	tdc = - 1;
+	adc = - 1;
+
+	Int_t el1 = - 1;
+	Int_t el2 = - 1; 
+  
+	//-----------------------------FWC1-----------------------------
+	if ( el % 2 == 0 )
+	{
+		// Even
+		if ( el == 48 ) el2 = 1;
+		else el2 = el/2 + 1;
+		el1 = el / 2;
+	}
+	else
+	{
+		// Odd
+		if ( el == 1 ) el2 = 24; 
+		else el2 = (el+1)/2 - 1;
+		el1 = (el+1) / 2;
+	}
+	hit1 = dynamic_cast<WHitScint *> (FWCHitBank -> GetHit(1, el1));
+	hit2 = dynamic_cast<WHitScint *> (FWCHitBank -> GetHit(1, el2)); 
+  
+	if ( hit1 )
+	{
+		hit = hit1;
+		fel[0] = el1;
+	}
+	else if ( hit2 )
+	{
+		hit = hit2;
+		fel[0] = el2;
+	}
+	else
+	{
+		if ( IsVerbose )
+		{
+			std::cout << "TrackReco: No FWC1 match" << std::endl;
+			WHitIter it(FWCHitBank);
+			while ( WHitScint *hit = static_cast<WHitScint *> (it.Next()) )
+			{
+				Int_t elt = hit -> ID().GetEl();
+				Int_t pl  = hit -> ID().GetPlane();
+
+				if ( pl == 1 ) cout << "FWC pl: " << pl << " elt: " << elt << " el1: " << el1 << " el2: " << el2 << endl;
+			}
+		}
+		hFailReas -> Fill(1);
+		IsGoodTrack = kFALSE;
+		return;
+	}
+ 
+	if ( HitInfo(hit, 1, tdc, adc, IsVerbose) )
+	{
+		ftdc[0] = tdc;
+		fadc[0] = adc;
+	}
+	else
+	{
+//		if ( IsVerbose ) std::cout << "TrackReco: No valid FWC1 hit" << std::endl;
+		IsGoodTrack = kFALSE;
+		hFailReas -> Fill(1);
+		return;
+	}
+
+	//-----------------------------FWC2-----------------------------
+	if ( el % 2 == 0 )
+	{
+		//even
+		if ( el == 48 ) el1 = 1;
+		else el1 = (el+2) / 2;
+		el2 = el / 2;
+	}
+	else
+	{
+		//odd
+		if ( el == 47 ) el2 = 1; 
+		else el2 = (el+3) / 2;
+		el1 = (el+1) / 2;
+	}
+	hit1 = dynamic_cast<WHitScint *> (FWCHitBank -> GetHit(2, el1));
+	hit2 = dynamic_cast<WHitScint *> (FWCHitBank -> GetHit(2, el2)); 
+  
+	if ( hit1 )
+	{
+		hit = hit1;
+		fel[1] = el1;
+	}
+	else if ( hit2 )
+	{
+		hit = hit2;
+		fel[1] = el2;
+	}
+	else
+	{
+		if ( IsVerbose ) std::cout << "TrackReco: No FWC2 match" << std::endl;
+		IsGoodTrack = kFALSE;
+		hFailReas -> Fill(2);
+		return;
+	}
+
+	if ( HitInfo(hit, 2, tdc, adc, IsVerbose) )
+	{
+		ftdc[1] = tdc;
+		fadc[1] = adc;
+	}
+	else
+	{
+		if ( IsVerbose ) std::cout << "TrackReco: No valid FWC2 hit" << std::endl;
+		IsGoodTrack = kFALSE;
+		hFailReas -> Fill(2);
+		return;
+	}
+
+	//-----------------------------FRH-----------------------------
+	if ( el%2 == 0 )
+	{
+		// even
+		if ( el == 48 ) el2 = 1;
+		else el2 = el/2 + 1;
+		el1 = el / 2;
+	}
+	else
+	{
+		// odd
+		if ( el == 1 ) el2 = 24; 
+		else el2 = (el+1)/2 - 1;
+		el1 = (el+1) / 2;
+	}
+
+	for ( Int_t p = 1; p <= 5; p++ )
+	{
+		hit1 = dynamic_cast<WHitScint *>(FRHHitBank -> GetHit(p, el1));
+		hit2 = dynamic_cast<WHitScint *>(FRHHitBank -> GetHit(p, el2)); 
+    
+		if ( hit1 )
+		{
+			hit = hit1;
+			fel[p + 2] = el1;
+		}
+		else if ( hit2 )
+		{
+			hit = hit2;
+			fel[p + 2] = el2;
+		}
+		else
+		{
+			if ( p == 1 )
+			{
+				//reguire plane 1 of FRH
+				if ( IsVerbose ) std::cout << "TrackReco: No FRH match plane: " << p << std::endl;
+				IsGoodTrack = kFALSE;
+				hFailReas -> Fill(3);
+				return;
+			}
+			else
+			{
+				break;
+			}
+		}
+    
+		if ( HitInfo(hit, p + 3, tdc, adc, IsVerbose) )
+		{
+			ftdc[p + 2] = tdc;
+			fadc[p + 2] = adc;
+		}
+		else
+		{
+			if ( p == 1 )
+			{
+				if ( IsVerbose ) std::cout << "TrackReco: No valid FRH hit plane: " << p << std::endl;
+				IsGoodTrack = kFALSE;
+				hFailReas -> Fill(3);
+				return;
+			}
+			else
+			{
+				fel[p + 2] = -1;
+				break;
+			}
+		}
+	}
+
+	//-----------------------------FPC-----------------------------
+	Int_t nFPCTracks = fFPCTrackBank -> GetEntries();
+	if ( nFPCTracks < 1 )
+	{
+		if ( IsVerbose ) std::cout << "TrackReco: No FPC hit" << std::endl;
+		IsGoodTrack = kFALSE;
+		hFailReas -> Fill(4);
+		return;
+	}
+
+	Int_t bin = el - 1;
+	Double_t best_dbin = 10.;
+	Double_t best_qual = 10.;
+	WTrack *best_tr = 0;
+	WTrackIter trIt(FPCTrackBank);
+	while ( WTrack *tr = dynamic_cast<WTrack *> (trIt.Next()) )
+	{
+		Int_t bin_fpc = TMath::Floor(48. * TVector2::Phi_0_2pi(tr -> Phi()) / TMath::TwoPi());
+		Double_t qual = tr -> dP() -> Theta();
+		Double_t dbin = bin_fpc - bin;
+		if      ( dbin >  23 ) dbin -= 48;
+		else if ( dbin < -24 ) dbin += 48;
+		dbin = fabs(dbin);
+		if ( dbin > 1 || dbin > best_dbin ) continue;
+		if ( dbin < best_dbin)
+		{
+			best_dbin = dbin;
+			best_qual = qual;
+			best_tr   = tr;
+		}
+		else if ( qual < best_qual )
+		{
+			best_dbin = dbin;
+			best_qual = qual;
+			best_tr   = tr;
+		}
+	}
+
+	if ( best_tr == 0 )
+	{
+		if ( IsVerbose )
+		{
+			std::cout << "TrackReco: No FPC match" << std::endl;
+		}
+		IsGoodTrack = kFALSE;
+		hFailReas -> Fill(4);
+		return;
+	}
+
+	fTTrack = new ((*fTrackArray)[NTTracks]) TreeTrack();
+
+	fTTrack -> SetTheta(best_tr -> Theta());
+	fTTrack -> SetPhi(best_tr -> Phi());
+	fTTrack -> SetTDCs(ftdc);
+	fTTrack -> SetElements(fel);
+
+	if( !fIsMC )
+	{
+		DoCalibAdc(fadc, fel, runnb, best_tr -> Theta() * TMath::RadToDeg(), beame);
+	}
+
+	fTTrack -> SetADCs(fadc);
+
+	if( fIsMC )
+	{
+		// Print contents of MC vertex bank
+//		printf("\nContents of MonteCarlo Vertex Bank \n");
+//		printf("Nr of vertices in Vertex Bank: %i \n", fMCVertexBank -> GetEntries());
+
+		// Usually we should have just one primary vertex in Bank
+		// use iterator to iterate over vertices
+	
+		WParticle *part = 0;
+		WVertexIter vIt(fMCVertexBank);
+		Int_t NrVertex = 0;
+		Double_t Etrue = -1;
+		Double_t Theta = -1;
+		Double_t Phi   = -1;
+
+		while ( WVertex *vert = dynamic_cast<WVertex *>(vIt.Next()) )
+		{
+			NrVertex++;
+//			printf("Info for MC Vertex %i \n", NrVertex);
+			for ( Int_t NrPart = 0; NrPart < vert -> NumberOfParticles(); NrPart++ )
+			{
+				part = vert -> GetParticle(NrPart);
+				Etrue = part -> GetEkin();
+				Theta = part -> GetTheta();
+				Phi   = part -> GetPhi();
+//				printf("  Particle %i in Bank: Ptype: %i, Etrue:%f, Theta:%f, Phi:%f\n", NrPart + 1, PType, Etrue, Theta * 180 / M_PI, Phi * 180 / M_PI);
+			}
+		}
+
+		fTTrack -> SetThetaTrue(Theta);
+		fTTrack -> SetPhiTrue(Phi);
+		fTTrack -> SetETrue(Etrue);
+	}
+
+	return;
+}
+
+
+void JediPolAnalysis::loadCalibration(Int_t ekin)
+{
+	// Set the layers
+	setLayers(ekin);
+
+	// load linearity correction
+	TFile *fFunc = new TFile(sLinFuncFileName, "OPEN");
+	for ( int l = 0; l < nLayers; l++ )
+	{
+		fLinearityCorrection[iSelectedLayers[l]] = (TF1 *) fFunc -> Get(Form("f%s", cLayerNames[iSelectedLayers[l]]));
+	}
+	fFunc -> Close();
+
+	// load linearity correction for nasty element
+	if ( fEl22Corr )
+	{
+		fFunc = new TFile(Form("linearity/linearity_correction_ekin%d.root", ekin), "OPEN");
+		for ( int l = 0; l < nLayers; l++ )
+		{
+			if ( iSelectedLayers[l] == 4 )
+			{
+				fLinearityCorrectionEl22 = (TF1 *) fFunc -> Get(Form("%s", cLayerNames[iSelectedLayers[l]]));
+			}
+		}
+		fFunc -> Close();
+	}
+	
+	// load mc graphs
+	TFile *fGraphs = new TFile(sMCGraphsFileName, "OPEN");
+	
+	for ( int l = 0; l < nLayers; l++ )
+	{
+		geMCGraphs[iSelectedLayers[l]] = (TGraphErrors *) fGraphs -> Get(Form("ge%s", cLayerNames[iSelectedLayers[l]]));
+	}
+
+	fGraphs -> Close();
+
+	// Set the run correction angle
+	Double_t dRunDepCorrAngle = 3.75;
+
+	// load mc graphs for every energy
+	TGraphErrors *geMCGraphsEkin[8];
+
+	fGraphs = new TFile(Form("mc_graphs/mc_graphs_dC_elastic_%dMeV.root", setEkinReal(ekin)), "OPEN");
+	for ( int l = 0; l < nLayers; l++ )
+	{
+		geMCGraphsEkin[iSelectedLayers[l]] = (TGraphErrors *) fGraphs -> Get(Form("ge%s", cLayerNames[iSelectedLayers[l]]));
+		// load mc value for run correction
+		dRunCorrMC[iSelectedLayers[l]] = geMCGraphsEkin[iSelectedLayers[l]] -> Eval(dRunDepCorrAngle);
+	}
+	fGraphs -> Close();
+
+	// load data graphs
+	fGraphs = new TFile(sDataGraphsFileName, "OPEN");
+
+	for ( int l = 0; l < nLayers; l++ )
+	{
+		geDataGraphs[iSelectedLayers[l]] = new TGraphErrors * [iLayerElements[iSelectedLayers[l]]];
+		
+		for ( int e = 0; e < iLayerElements[iSelectedLayers[l]]; e++ )
+		{
+			geDataGraphs[iSelectedLayers[l]][e] = (TGraphErrors *) fGraphs -> Get(Form("%s/ge%s_Element%i", cLayerNames[iSelectedLayers[l]], cLayerNames[iSelectedLayers[l]], e + 1));
+		}
+	}
+	fGraphs -> Close();
+
+	// load rundep graphs
+	for ( int l = 0; l < nLayers; l++ )
+	{
+		fGraphs = new TFile(Form("%s/%s_%d/%s.root", sRunDepPath.Data(), fTarget.Data(), ekin, cLayerNames[iSelectedLayers[l]]), "OPEN");
+		geRunDependenceGraphs[iSelectedLayers[l]] = new TGraphErrors * [iLayerElements[iSelectedLayers[l]]];
+
+		for ( int e = 0; e < iLayerElements[iSelectedLayers[l]]; e++ )
+		{
+			geRunDependenceGraphs[iSelectedLayers[l]][e] = (TGraphErrors *) fGraphs->Get(Form("geResult_Element%i", e + 1));
+		}
+
+		fGraphs->Close();
+	}
+}
+
+
+Bool_t CorrectonEl22(Int_t el, Int_t layer)
+{
+	Double_t corrfac = kFALSE;
+	if ( el != 22 || layer != 4 ) return corrfac;
+	else corrfac = kTRUE;
+	return corrfac;
+}
+
+
+void JediPolAnalysis::DoCalibAdc(Double_t *adc, Int_t *el, Int_t run, Double_t theta, Int_t ekin)
+{
+	Int_t iElement = 0.;
+	Double_t dEnergy = 0.;
+
+	for ( int l = 0; l < nLayers; l++ )
+	{
+		iElement = el[iSelectedLayers[l]] - 1;
+		if ( iElement < 0 ) continue;
+		dEnergy = adc[iSelectedLayers[l]];
+		// Theta correction and energy calibration
+		dEnergy *= geMCGraphs[iSelectedLayers[l]] -> Eval(theta) / geDataGraphs[iSelectedLayers[l]][iElement] -> Eval(theta);
+		if ( ekin == 380 && fTarget == "C" )
+		{
+			// Apply run dependent correction (NOTE: it is given in MeV)
+			dEnergy *= dRunCorrMC[iSelectedLayers[l]] / (0.001 * geRunDependenceGraphs[iSelectedLayers[l]][iElement] -> Eval(run));
+			// Apply correction for nonlinearity
+			dEnergy = fLinearityCorrection[iSelectedLayers[l]] -> Eval(dEnergy);
+		}
+		else
+		{
+			// Apply correction for nonlinearity
+			dEnergy = fLinearityCorrection[iSelectedLayers[l]] -> Eval(dEnergy);
+			// Apply run dependent correction (NOTE: it is given in MeV)
+			dEnergy *= dRunCorrMC[iSelectedLayers[l]] / (0.001 * geRunDependenceGraphs[iSelectedLayers[l]][iElement] -> Eval(run));
+			// Apply corection for nasty elements
+			if ( fEl22Corr && CorrectonEl22(iElement, iSelectedLayers[l]) )
+			{
+				dEnergy = fLinearityCorrectionEl22 -> Eval(dEnergy);
+			}
+		}
+		
+		fadc[iSelectedLayers[l]] = dEnergy;
+//		if ( l == 1 ) cout << "cal: " << fadc[iSelectedLayers[l]] << endl;
+	}
+
+	return;
+}
+
+
+//#####################################################################
+void JediPolAnalysis::ProcessEvent()
+{
+	if ( fProcessed ) return;
+	fProcessed = kTRUE;
+	if ( !fGoodRun ) return;
+
+	if ( fHeader -> IsScalerEvent() ) return;
+
+	time_h     = fHeader -> GetTimeH();
+	time_cycle = fHeader -> GetTimeInCycle();
+	trigger    = fHeader -> GetTrigger();
+
+	int pol = - 1;
+
+	if ( fIsMC ) pol = 0;
+	else pol = fHeader -> GetPolarisationState();
+	polar = pol;
+
+	fNTTracks = 0;
+	Bool_t GoodTrack = kFALSE;
+	WHitIter it(fFTHHitBank);
+	while ( WHitScint *hit = static_cast<WHitScint *> (it.Next()) )
+	{
+		TrackReco(hit, fFWCHitBank, fFRHHitBank, fFPCTrackBank, fNTTracks, GoodTrack, kFALSE);
+		if ( GoodTrack ) fNTTracks++;
+	}
+	hTracksN -> Fill(fNTTracks); 
+
+	if ( fTree && fNTTracks > 0 ) fTree -> Fill();
+
+	// Raw Info
+/*
+	TrackRaw(fFWCHitBank, 1, 1);
+	TrackRaw(fFWCHitBank, 2, 2);
+	TrackRaw(fFTHHitBank, 3, 1);
+	for ( Int_t p = 1; p <= 5; p++ )
+	{
+		TrackRaw(fFRHHitBank, 3 + p, p);
+	}
+*/
+
+	Clear();
+	return;
+}
+
+
+//#####################################################################
+void JediPolAnalysis::Clear(Option_t *option)
+{
+	fProcessed = kFALSE;
+	polar = - 1;
+	if ( fTrackArray ) fTrackArray -> Clear();
+	fNTTracks = 0;
+
+	time_h     = - 1;
+	time_cycle = - 1;
+	trigger    = - 1;
+}
+
+
+//#####################################################################
+void JediPolAnalysis::Print(Option_t *option)
+{
+	return;
+}
+
+
+//#####################################################################
+void JediPolAnalysis::UserCommand(CCommand *command)
+{
+	return;
+}
+
+
+//#####################################################################
+void JediPolAnalysis::SetupSpectra(const char *lpath)
+{
+	TString subdir[5];
+	TString rootpath = lpath;
+	//###################### Tracking ############################
+	TString lpath1=Form("/Track/");
+
+	hFailReas = new TH1F("hFailReas", "hFailReas", 11, -0.5, 10.5);
+	gHistoManager -> Add(hFailReas, rootpath + lpath1);
+	
+	hTracksN  = new TH1F("hTracksN" , "hTracksN" , 11, -0.5, 10.5);
+	gHistoManager -> Add(hTracksN,rootpath + lpath1);
+
+	TString name;
+	for ( Int_t p = 1; p <= 8; p++ )
+	{
+		name = Form("TimeAdc_plane%d"      , p);
+		hADCt[p - 1]          = new TH1F(name, name, 500.,   0., 500.);
+		gHistoManager -> Add(hADCt[p - 1],          rootpath + lpath1);
+
+		name = Form("TimeAdcvsEl_plane%d"  , p);
+		hADCtvsEl[p - 1]      = new TH2F(name, name, 48, 0.5, 48.5, 500.,    0., 500.);
+		gHistoManager -> Add(hADCtvsEl[p - 1],      rootpath + lpath1);
+
+		name = Form("TimeDelta_plane%d"    , p);
+		hDeltaTime[p - 1]     = new TH1F(name, name, 500., -100, 100.);
+		gHistoManager -> Add(hDeltaTime[p - 1],     rootpath + lpath1);
+
+		name = Form("TimeDeltavsEl_plane%d", p);
+		hDeltaTimevsEl[p - 1] = new TH2F(name, name, 48, 0.5, 48.5, 500., -100., 100.);
+		gHistoManager -> Add(hDeltaTimevsEl[p - 1], rootpath + lpath1);
+	}
+}

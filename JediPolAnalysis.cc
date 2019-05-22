@@ -291,6 +291,7 @@ void JediPolAnalysis::ProcessEvent()
 		TrackReco(hit, m_FWCHitBank, m_FRHHitBank, m_FPCTrackBank, m_NTracks, goodTrack);
 		if ( goodTrack ) m_NTracks++;
 	}
+	std::cout << m_NTracks << std::endl;
 	m_HNTracks -> Fill(m_NTracks); 
 
 	if ( m_Tree && m_NTracks > 0 ) m_Tree -> Fill();
@@ -315,11 +316,13 @@ void JediPolAnalysis::ProcessEvent()
 void JediPolAnalysis::SetTimeQDCPeak(Int_t layer, Double_t peakTime, Double_t dev)
 {
 	m_TimeQDCPeak[layer] = peakTime;
+	m_TimeQDCPeakDev[layer] = dev;
 }
 
 void JediPolAnalysis::SetDeltaTimePeak(Int_t layer, Double_t peakTime, Double_t dev)
 {
 	m_DeltaTimePeak[layer] = peakTime;
+	m_DeltaTimePeakDev[layer] = dev;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -774,7 +777,11 @@ Bool_t JediPolAnalysis::HitInfo(WHitScint* hit, Int_t planeGlobal, Double_t &ADC
 		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
-			std::cout << "[Anlaysis::HitInfo] No T_QDC in the window" << std::endl;
+			std::cout << "[Anlaysis::HitInfo] No T_QDC in the window [";
+			std::cout << m_TimeQDCPeak[planeGlobal-1] - 6.*m_TimeQDCPeakDev[planeGlobal-1];
+			std::cout << ", ";
+			std::cout << m_TimeQDCPeak[planeGlobal-1] + 6.*m_TimeQDCPeakDev[planeGlobal-1];
+			std::cout << "]";
 			std::cout << "\033[0m" << std::endl;
 		}
 		return isGoodTrack = kFALSE;

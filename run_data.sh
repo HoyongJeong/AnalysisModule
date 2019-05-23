@@ -12,8 +12,8 @@ ANANAME=ana_${RUNNO}
 #cd /users/hyjeong/works/wasa_analysis/0_RawAnalysis
 
 if [ -f ${FILEIN} ];  then
-	./AnalysisModule/jediwasa -fin cluster:$FILEIN -n ${ANANAME} -tree 1 -binsize 0.2 -abort -local kTRUE -v 1
-#	./AnalysisModule/jediwasa -fin cluster:$FILEIN -n ${ANANAME} -tree 1 -binsize 0.2 -abort -local kTRUE -v 1 -nev 1000
+#	./AnalysisModule/jediwasa -fin cluster:$FILEIN -n ${ANANAME} -tree 1 -binsize 0.2 -abort -local kTRUE -v 1
+	./AnalysisModule/jediwasa -fin cluster:$FILEIN -n ${ANANAME} -tree 1 -binsize 0.2 -abort -local kTRUE -v 2 -nev 1000
 else
 	echo "Run ${RUNNO} does not exist"
 fi

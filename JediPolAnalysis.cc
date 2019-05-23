@@ -827,7 +827,7 @@ Bool_t JediPolAnalysis::HitInfo(WHitScint* hit, Int_t planeGlobal, Double_t &ADC
 		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
-			std::cout << "[Analysis::HitInfo] No T in window" << endl;
+			std::cout << "[Analysis::HitInfo] No T in window";
 			std::cout << "\033[0m" << std::endl;
 		}
 		return isGoodTrack = kFALSE;

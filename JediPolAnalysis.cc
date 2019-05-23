@@ -513,7 +513,7 @@ void JediPolAnalysis::TrackReco(WHitScint* FTHHit, WHitBank* FWCHitBank, WHitBan
 		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
-			std::cout << "TrackReco: No valid FWC1 hit";
+			std::cout << "[Analysis::TrackReco] No valid FWC1 hit";
 			std::cout << "\033[0m" << std::endl;
 		}
 		isGoodTrack = kFALSE;
@@ -616,7 +616,7 @@ void JediPolAnalysis::TrackReco(WHitScint* FTHHit, WHitBank* FWCHitBank, WHitBan
 			if ( p == 1 )
 			{
 				// Reguire plane 1 of FRH
-				if ( m_Verbose )
+				if ( m_Verbose > 1 )
 				{
 					std::cout << "\033[1;33m";
 					std::cout << "[Analysis::TrackReco] No FRH match plane: " << p;
@@ -709,7 +709,7 @@ void JediPolAnalysis::TrackReco(WHitScint* FTHHit, WHitBank* FWCHitBank, WHitBan
 		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
-			std::cout << "TrackReco: No FPC match";
+			std::cout << "[Analysis::TrackReco] No FPC match";
 			std::cout << "\033[0m" << std::endl;
 		}
 		isGoodTrack = kFALSE;
@@ -796,7 +796,7 @@ Bool_t JediPolAnalysis::HitInfo(WHitScint* hit, Int_t planeGlobal, Double_t &ADC
 		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
-			std::cout << "HitInfo: No T";
+			std::cout << "[Analysis::HitInfo] No T";
 			std::cout << "\033[0m" << std::endl;
 		}
 		return isGoodTrack = kFALSE;

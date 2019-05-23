@@ -291,7 +291,7 @@ void JediPolAnalysis::ProcessEvent()
 		TrackReco(hit, m_FWCHitBank, m_FRHHitBank, m_FPCTrackBank, m_NTracks, goodTrack);
 		if ( goodTrack ) m_NTracks++;
 	}
-	std::cout << m_NTracks << std::endl;
+//	std::cout << m_NTracks << std::endl;
 	m_HNTracks -> Fill(m_NTracks); 
 
 	if ( m_Tree && m_NTracks > 0 ) m_Tree -> Fill();
@@ -510,7 +510,7 @@ void JediPolAnalysis::TrackReco(WHitScint* FTHHit, WHitBank* FWCHitBank, WHitBan
 	}
 	else
 	{
-		if ( m_Verbose )
+		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
 			std::cout << "TrackReco: No valid FWC1 hit";
@@ -824,7 +824,7 @@ Bool_t JediPolAnalysis::HitInfo(WHitScint* hit, Int_t planeGlobal, Double_t &ADC
 
 	if ( accepted < 0 )
 	{
-		if ( m_Verbose )
+		if ( m_Verbose > 1 )
 		{
 			std::cout << "\033[1;33m";
 			std::cout << "[Analysis::HitInfo] No T in window" << endl;
